@@ -77,8 +77,8 @@ def train(args):
 
     print(f"Loaded {len(train_dataset)} train / {len(val_dataset)} val images")
 
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=4, pin_memory=True)
-    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4, pin_memory=True)
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, pin_memory=True)
+    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers, pin_memory=True)
 
     # Model
     model = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.IMAGENET1K_V1)
@@ -104,7 +104,8 @@ def train(args):
     optimizer = optim.Adam(model.classifier.parameters(), lr=args.lr)
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.1)
     
-    scaler = torch.amp.GradScaler('cuda' if torch.cuda.is_available() else 'cpu')
+    use_amp = device.type == "cuda"
+    scaler = torch.amp.GradScaler('cuda') if use_amp else None
 
     best_loss = float('inf')
     output_dir = Path(args.output_dir)
@@ -125,13 +126,18 @@ def train(args):
             images, weights = images.to(device), weights.to(device)
             optimizer.zero_grad()
             
-            with torch.amp.autocast('cuda' if torch.cuda.is_available() else 'cpu'):
+            if use_amp:
+                with torch.amp.autocast('cuda'):
+                    outputs = model(images)
+                    loss = criterion(outputs, weights)
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
+            else:
                 outputs = model(images)
                 loss = criterion(outputs, weights)
-                
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
+                loss.backward()
+                optimizer.step()
             
             running_loss += loss.item() * images.size(0)
             total += images.size(0)
@@ -145,9 +151,12 @@ def train(args):
         with torch.no_grad():
             for images, weights in val_loader:
                 images, weights = images.to(device), weights.to(device)
-                with torch.amp.autocast('cuda' if torch.cuda.is_available() else 'cpu'):
+                if use_amp:
+                    with torch.amp.autocast('cuda'):
+                        outputs = model(images)
+                else:
                     outputs = model(images)
-                    loss = criterion(outputs, weights)
+                loss = criterion(outputs, weights)
                 val_loss += loss.item() * images.size(0)
                 val_total += images.size(0)
 
@@ -171,5 +180,6 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--unfreeze_epoch", type=int, default=3, help="Epoch to unfreeze backbone")
+    parser.add_argument("--num_workers", type=int, default=2, help="DataLoader workers (use 0-2 on Colab)")
     args = parser.parse_args()
     train(args)

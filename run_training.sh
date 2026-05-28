@@ -7,7 +7,7 @@ echo "Starting Full Fine-Tuning Pipeline..."
 echo "============================================="
 echo "1. Training Classifier on Food-101"
 echo "============================================="
-python scripts/train_classifier.py --data_dir ./data/food-101 --use_torchvision_dataset --output_dir ./app/models --epochs 20 --batch_size 32
+python scripts/train_classifier.py --data_dir ./data --use_torchvision_dataset --output_dir ./app/models --epochs 20 --batch_size 32 --num_workers 2
 
 echo "============================================="
 echo "2. Training Portion Estimator on Nutrition5k"
@@ -18,7 +18,7 @@ echo "============================================="
 # For now, this points to the dummy paths or requires manual CSV creation based on the actual Nutrition5k split.
 # I will output a message to ensure the CSVs are prepared first.
 echo "Make sure to prepare train_csv and val_csv from Nutrition5k metadata before running this step."
-# python scripts/train_portion.py --train_csv ./data/nutrition5k/train.csv --val_csv ./data/nutrition5k/val.csv --img_dir ./data/nutrition5k/imagery --output_dir ./app/models --epochs 20 --batch_size 16
+# python scripts/train_portion.py --train_csv ./data/nutrition5k/train.csv --val_csv ./data/nutrition5k/val.csv --img_dir ./data/nutrition5k/imagery --output_dir ./app/models --epochs 20 --batch_size 16 --num_workers 2
 
 echo "============================================="
 echo "3. Exporting to ONNX"
