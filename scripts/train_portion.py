@@ -16,6 +16,7 @@ from PIL import Image
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 from torch.utils.data import Dataset, DataLoader
 from torchvision import models, transforms
 
@@ -77,8 +78,16 @@ def train(args):
 
     print(f"Loaded {len(train_dataset)} train / {len(val_dataset)} val images")
 
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, pin_memory=True)
-    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers, pin_memory=True)
+    # DataLoader with persistent workers and prefetching for speed
+    loader_kwargs = dict(
+        batch_size=args.batch_size,
+        num_workers=args.num_workers,
+        pin_memory=True,
+        persistent_workers=args.num_workers > 0,
+        prefetch_factor=2 if args.num_workers > 0 else None,
+    )
+    train_loader = DataLoader(train_dataset, shuffle=True, **loader_kwargs)
+    val_loader = DataLoader(val_dataset, shuffle=False, **loader_kwargs)
 
     # Model
     model = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.IMAGENET1K_V1)
@@ -95,15 +104,25 @@ def train(args):
     
     model = model.to(device)
 
+    # Compile model for optimized GPU kernels (20-50% speedup)
+    if device.type == "cuda":
+        model = torch.compile(model)
+        print("Model compiled with torch.compile")
+
     # Freeze backbone for first few epochs
     for param in model.features.parameters():
         param.requires_grad = False
 
     # L1 Loss (MAE) is typically better for weight estimation than MSE
     criterion = nn.L1Loss()
-    optimizer = optim.Adam(model.classifier.parameters(), lr=args.lr)
-    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.1)
-    
+    # AdamW decouples weight decay from gradients — standard for fine-tuning
+    optimizer = optim.AdamW(model.classifier.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+
+    # Cosine annealing with linear warmup during frozen-backbone phase
+    warmup_scheduler = LinearLR(optimizer, start_factor=0.1, total_iters=args.unfreeze_epoch)
+    cosine_scheduler = CosineAnnealingLR(optimizer, T_max=args.epochs - args.unfreeze_epoch)
+    scheduler = SequentialLR(optimizer, schedulers=[warmup_scheduler, cosine_scheduler], milestones=[args.unfreeze_epoch])
+
     use_amp = device.type == "cuda"
     scaler = torch.amp.GradScaler('cuda') if use_amp else None
 
@@ -111,35 +130,49 @@ def train(args):
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    grad_accum = args.grad_accum_steps
+
     for epoch in range(args.epochs):
         # Unfreeze backbone after warmup
         if epoch == args.unfreeze_epoch:
             print(f"Epoch {epoch}: Unfreezing backbone")
             for param in model.features.parameters():
                 param.requires_grad = True
-            optimizer = optim.Adam(model.parameters(), lr=args.lr * 0.1)
+            # Rebuild optimizer with all params and lower LR for backbone
+            optimizer = optim.AdamW([
+                {"params": model.features.parameters(), "lr": args.lr * 0.1},
+                {"params": model.classifier.parameters(), "lr": args.lr},
+            ], weight_decay=args.weight_decay)
+            # Fresh cosine schedule for remaining epochs
+            scheduler = CosineAnnealingLR(optimizer, T_max=args.epochs - args.unfreeze_epoch)
 
         # Train
         model.train()
         running_loss, total = 0.0, 0
-        for images, weights in train_loader:
-            images, weights = images.to(device), weights.to(device)
-            optimizer.zero_grad()
-            
+        optimizer.zero_grad(set_to_none=True)
+
+        for step, (images, weights) in enumerate(train_loader):
+            images = images.to(device, non_blocking=True)
+            weights = weights.to(device, non_blocking=True)
+
             if use_amp:
                 with torch.amp.autocast('cuda'):
                     outputs = model(images)
-                    loss = criterion(outputs, weights)
+                    loss = criterion(outputs, weights) / grad_accum
                 scaler.scale(loss).backward()
-                scaler.step(optimizer)
-                scaler.update()
+                if (step + 1) % grad_accum == 0 or (step + 1) == len(train_loader):
+                    scaler.step(optimizer)
+                    scaler.update()
+                    optimizer.zero_grad(set_to_none=True)
             else:
                 outputs = model(images)
-                loss = criterion(outputs, weights)
+                loss = criterion(outputs, weights) / grad_accum
                 loss.backward()
-                optimizer.step()
-            
-            running_loss += loss.item() * images.size(0)
+                if (step + 1) % grad_accum == 0 or (step + 1) == len(train_loader):
+                    optimizer.step()
+                    optimizer.zero_grad(set_to_none=True)
+
+            running_loss += loss.item() * grad_accum * images.size(0)
             total += images.size(0)
 
         train_loss = running_loss / total
@@ -150,7 +183,8 @@ def train(args):
         val_loss, val_total = 0.0, 0
         with torch.no_grad():
             for images, weights in val_loader:
-                images, weights = images.to(device), weights.to(device)
+                images = images.to(device, non_blocking=True)
+                weights = weights.to(device, non_blocking=True)
                 if use_amp:
                     with torch.amp.autocast('cuda'):
                         outputs = model(images)
@@ -161,7 +195,8 @@ def train(args):
                 val_total += images.size(0)
 
         val_loss = val_loss / val_total
-        print(f"Epoch {epoch+1}/{args.epochs} — Train MAE: {train_loss:.2f}g, Val MAE: {val_loss:.2f}g")
+        lr_current = optimizer.param_groups[0]['lr']
+        print(f"Epoch {epoch+1}/{args.epochs} — Train MAE: {train_loss:.2f}g, Val MAE: {val_loss:.2f}g, LR: {lr_current:.2e}")
 
         if val_loss < best_loss:
             best_loss = val_loss
@@ -179,7 +214,9 @@ if __name__ == "__main__":
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--weight_decay", type=float, default=1e-4, help="AdamW weight decay")
     parser.add_argument("--unfreeze_epoch", type=int, default=3, help="Epoch to unfreeze backbone")
     parser.add_argument("--num_workers", type=int, default=2, help="DataLoader workers (use 0-2 on Colab)")
+    parser.add_argument("--grad_accum_steps", type=int, default=1, help="Gradient accumulation steps")
     args = parser.parse_args()
     train(args)
