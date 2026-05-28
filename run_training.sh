@@ -3,8 +3,6 @@
 
 echo "Starting Full Fine-Tuning Pipeline..."
 
-# Activate the conda environment
-source /home/drtex/anaconda3/bin/activate mlenv
 
 echo "============================================="
 echo "1. Training Classifier on Food-101"

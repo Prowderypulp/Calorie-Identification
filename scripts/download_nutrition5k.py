@@ -17,7 +17,7 @@ def download():
     # The imagery can be huge (RGB + Depth + IR). We might just want the imagery/realsense/rgb
     # and the metadata.
     
-    gsutil_path = "/home/drtex/.conda/envs/mlenv/bin/gsutil"
+    gsutil_path = "gsutil"
     commands = [
         # Download metadata
         [gsutil_path, "-m", "cp", "-r", "gs://nutrition5k_dataset/nutrition5k_dataset/metadata", str(data_dir)],
