@@ -93,12 +93,12 @@ class FoodClassifier:
                 import torch
                 import torchvision.models as models
 
-                model = models.efficientnet_b0(weights=None)
+                model = models.resnet50(weights=None)
                 # Replace classifier head for our number of classes
                 if self.class_names:
                     import torch.nn as nn
 
-                    model.classifier[1] = nn.Linear(1280, len(self.class_names))
+                    model.fc = nn.Linear(model.fc.in_features, len(self.class_names))
 
                 model.load_state_dict(torch.load(pth_path, map_location="cpu"))
                 model.eval()

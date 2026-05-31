@@ -7,7 +7,7 @@ echo "Starting Full Fine-Tuning Pipeline..."
 echo "============================================="
 echo "1. Training Classifier on Food-101"
 echo "============================================="
-python scripts/train_classifier.py --data_dir ./data --use_torchvision_dataset --output_dir ./app/models --epochs 20 --batch_size 32 --num_workers 2
+python scripts/train_classifier.py --data_dir ./data --use_torchvision_dataset --output_dir ./app/models --epochs 10 --batch_size 128 --num_workers 4 --warmup_epochs 1
 
 echo "============================================="
 echo "2. Training Portion Estimator on Nutrition5k"

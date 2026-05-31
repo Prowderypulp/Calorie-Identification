@@ -15,11 +15,11 @@ from torchvision import models
 
 
 def export(args):
-    model = models.efficientnet_b0(weights=None)
-    
     if args.model_type == "classifier":
-        model.classifier[1] = nn.Linear(1280, args.num_classes)
+        model = models.resnet50(weights=None)
+        model.fc = nn.Linear(model.fc.in_features, args.num_classes)
     elif args.model_type == "portion":
+        model = models.efficientnet_b0(weights=None)
         model.classifier = nn.Sequential(
             nn.Dropout(p=0.2, inplace=True),
             nn.Linear(1280, 512),
