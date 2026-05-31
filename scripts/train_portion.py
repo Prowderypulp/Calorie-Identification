@@ -200,7 +200,8 @@ def train(args):
 
         if val_loss < best_loss:
             best_loss = val_loss
-            torch.save(model.state_dict(), output_dir / "portion_estimator.pth")
+            state_dict = getattr(model, "_orig_mod", model).state_dict()
+            torch.save(state_dict, output_dir / "portion_estimator.pth")
             print(f"  Saved best model (val_loss={val_loss:.2f}g)")
 
     print(f"Training complete. Best val MAE: {best_loss:.2f}g")

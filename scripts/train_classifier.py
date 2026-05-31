@@ -167,7 +167,9 @@ def train(args):
 
         if val_acc > best_acc:
             best_acc = val_acc
-            torch.save(model.state_dict(), output_dir / "classifier.pth")
+            # Unwrap torch.compile so the checkpoint loads into a plain efficientnet_b0
+            state_dict = getattr(model, "_orig_mod", model).state_dict()
+            torch.save(state_dict, output_dir / "classifier.pth")
             print(f"  Saved best model (val_acc={val_acc:.4f})")
 
     with open(output_dir / "class_names.json", "w") as f:
