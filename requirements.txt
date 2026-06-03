@@ -1,0 +1,28 @@
+# Core framework
+fastapi
+uvicorn[standard]
+python-multipart
+
+# ML / Vision
+torch
+torchvision
+onnxruntime
+onnx
+
+# Image processing
+Pillow
+
+# Data / DB
+pandas
+numpy
+
+# Validation & settings
+pydantic
+pydantic-settings
+
+# Testing
+pytest
+httpx
+
+# Logging
+structlog
